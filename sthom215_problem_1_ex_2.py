@@ -3,6 +3,8 @@ import scipy.signal as sig
 import matplotlib.pyplot as plt
 from typing import Tuple
 from numpy.typing import NDArray
+import numpy.linalg as la
+from scipy.optimize import minimize
 
 
 class Experiment:
@@ -54,3 +56,73 @@ class Neuron(Experiment):
             return self.RNG.poisson(lam=self.activity(), size=(self.n_trials,))
         else:
             return self.RNG.poisson(lam=self.activity())
+
+
+########################### OBJECTIVE FUNCTIONS ###########################
+
+def objPriorRegularized(g, X, r, sig):
+    lam = np.exp(X @ g)
+    return -r.T @ np.log(lam) + lam.sum() + (g.T @ la.inv(sig) @ g) + np.sum(la.inv(sig) @ g)
+
+
+def objPriorUnregularized(g, X, r, sig):
+    lam = np.exp(X @ g)
+    return -r.T @ np.log(lam) + lam.sum() + (g.T @ la.inv(sig) @ g)
+
+
+def objMLL(g, X, r):
+    lam = np.exp(X @ g)
+    return -r.T @ np.log(lam) + lam.sum()
+
+
+########################### OPTIMIZATION MAIN FUN ###########################
+opt = {'disp': True,
+       'maxiter': 1000,
+       'gtol': 1e-9}
+
+
+def optimization(obj: callable,
+                 n_neurons: int = 100,
+                 n_trials: int = 100,
+                 random_init: bool = False,
+                 stimulus_scale: float = 1.0,
+                 *, opt: dict = opt
+                 ) -> NDArray:
+
+    neurons = Neuron(n_neurons, n_trials, mu=0, sigma=1)
+    true_g = neurons.get_tuning_curve(neurons.n_trials)
+
+    MAP_FUNCS = [
+        'objPriorUnregularized',
+        'objPriorRegularized',
+    ]
+
+    ML_FUNCS = [
+        'objMLL'
+    ]
+
+    # Parameters to be passed to objective function
+    resp_m = neurons.activity()
+    stimuli_m = stimulus_scale * neurons.stimuli
+
+    if obj.__name__ in MAP_FUNCS:
+        sig_scale = 1
+        sig = sig_scale * np.eye(true_g.shape[0])
+        args = (stimuli_m, resp_m, sig)
+    elif obj.__name__ in ML_FUNCS:
+        sig = None
+        args = (stimuli_m, resp_m)
+    else:
+        raise ValueError(f'Objective function {obj.__name__} not recognized.')
+
+    if random_init:
+        g_init = np.random.randn(true_g.shape[0])
+    else:
+        g_init = np.zeros_like(true_g)
+
+    resultMAP = minimize(fun=obj,
+                         x0=g_init,
+                         args=args,
+                         method='BFGS',
+                         options=opt)
+    return resultMAP.x
