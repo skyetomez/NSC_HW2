@@ -1,8 +1,12 @@
 from scipy.io import loadmat
-import seaborn as sns
 import numpy as np
 from numpy.typing import NDArray
 import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+import plotly.graph_objects as go
+import seaborn as sns
+from neo import SpikeTrain
+import quantities as pq
 
 
 def load_mat(dat: str):
@@ -23,6 +27,81 @@ def load_mat(dat: str):
     return converted
 
 
+def create_SpikeTrain(data: NDArray):
+
+    num_trials, num_neurons, _ = data.shape
+    spike_trials = list()
+    spike_trains = list()
+
+    for trial in range(num_trials):
+        spikes_per_trial = list()
+        for neuron in range(num_neurons):
+            spike_times = np.argwhere(data[trial, neuron, :]).squeeze()
+            spike_counts = data[trial, neuron, spike_times].squeeze()
+            repeated_st = np.repeat(spike_times, spike_counts)
+            st = SpikeTrain(repeated_st*pq.ms, units='ms', t_stop=600)
+            spikes_per_trial.append(st)
+        spike_trials.append(spikes_per_trial)
+    return spike_trials
+
+
+def pcaOverTime(mat: NDArray, num_components: int = 3):
+    trials, neurons, _ = mat.shape
+
+    transformed_mat = np.zeros((trials, neurons, num_components))
+
+    for t in range(trials):
+        data_at_time = mat[t, :, :]
+
+        pca = PCA(n_components=num_components)
+        transformed_data_at_time = pca.fit_transform(data_at_time)
+
+        transformed_mat[t, :, :] = transformed_data_at_time.reshape(
+            (1, neurons, num_components))
+
+    return transformed_mat
+
+
+def plot_principal_components(index, mat1, mat2):
+
+    marker_size = 3
+
+    fig1 = go.Figure(data=[go.Scatter3d(
+        x=mat1[index, :, 0],
+        y=mat1[index, :, 1],
+        z=mat1[index, :, 2],
+        mode='markers',
+        marker=dict(size=marker_size)
+    )])
+
+    fig1.update_layout(title='Principal Components - Tensor 1')
+
+    fig2 = go.Figure(data=[go.Scatter3d(
+        x=mat2[index, :, 0],
+        y=mat2[index, :, 1],
+        z=mat2[index, :, 2],
+        mode='markers',
+        marker=dict(size=marker_size)
+    )])
+
+    fig2.update_layout(title='Principal Components - Tensor 2')
+
+    fig1.update_layout(scene=dict(
+        xaxis_title='X',
+        yaxis_title='Y',
+        zaxis_title='Z'),
+        margin=dict(r=20, b=10, l=10, t=40))
+
+    fig2.update_layout(scene=dict(
+        xaxis_title='X',
+        yaxis_title='Y',
+        zaxis_title='Z'),
+        margin=dict(r=20, b=10, l=10, t=40))
+
+    fig1.show()
+    fig2.show()
+
+
 def smoothing(dat: NDArray, sigma: float, A: float) -> NDArray:
     if dat.ndim == 2:
         return _smoothing(dat, sigma, A)
@@ -34,16 +113,13 @@ def smoothing(dat: NDArray, sigma: float, A: float) -> NDArray:
 
 def _smoothing(dat: NDArray, sigma: float, A, ) -> NDArray:
     # dat: (num_neurons, time_bins)
-    K = A * _get_kernel(dat.shape[1], sigma)
+    K = A * _get_kernel(dat.shape[-1], sigma)
     return np.dot(dat, K)
 
 
 def _smoothing_3D(tensor: NDArray, sigma: float, A: float) -> NDArray:
     # tensor shape: (trials, num_neurons, num_time_bins)
-    smoothed_tensor = np.empty_like(tensor)
-    for i in range(tensor.shape[0]):
-        smoothed_tensor[i] = _smoothing(tensor[i], sigma, A)
-    return smoothed_tensor
+    return np.apply_along_axis(_smoothing, 0, tensor, sigma=sigma, A=A)
 
 
 def _get_kernel(size: int, l: float) -> NDArray:
